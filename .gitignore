@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+**/.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Run outputs and generated media (regenerate with scripts/prerender.py)
+backend/runs/
+backend/fallback/
+
+# OS / misc
+.DS_Store
+*.log

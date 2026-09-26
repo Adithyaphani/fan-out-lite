@@ -1,0 +1,250 @@
+{
+  "run_id": "4a83bb11",
+  "brief": "",
+  "brand": {
+    "product_name": "Aura Cold Brew",
+    "category": "premium canned coffee",
+    "palette": [
+      "#0B0D10",
+      "#FF6B35",
+      "#F4E9DD"
+    ],
+    "style": "warm cinematic product macro",
+    "product_refs": [
+      "refs/ref_0.png"
+    ],
+    "spec_notes": "",
+    "brand_sheet": "images/brand_sheet.png"
+  },
+  "markets": [
+    {
+      "id": "IN",
+      "city": "Delhi",
+      "country": "India",
+      "language": "Hindi",
+      "script": "Devanagari",
+      "cultural_cues": [
+        "warm evening light",
+        "busy street cafe",
+        "kulhad cups nearby"
+      ],
+      "music_style": "modern filmi-pop, tabla and synth"
+    },
+    {
+      "id": "BR",
+      "city": "Sao Paulo",
+      "country": "Brazil",
+      "language": "Portuguese",
+      "script": "Latin",
+      "cultural_cues": [
+        "urban rooftop",
+        "tropical plants",
+        "bright afternoon"
+      ],
+      "music_style": "bossa nova groove, nylon guitar"
+    }
+  ],
+  "bpm": 128,
+  "duration_s": 6.0,
+  "aspect": "16:9",
+  "shots": [
+    {
+      "id": "s1",
+      "role": "establishing",
+      "description": "wide establishing shot that sets the scene and mood",
+      "master_image": "images/master_s1.png",
+      "status": "done"
+    },
+    {
+      "id": "s2",
+      "role": "product",
+      "description": "clean product reveal, centred, shallow depth of field",
+      "master_image": "images/master_s2.png",
+      "status": "done"
+    },
+    {
+      "id": "s3",
+      "role": "hero",
+      "description": "the hero moment: a satisfying pour / use of the product",
+      "master_image": "images/master_s3.png",
+      "status": "done"
+    },
+    {
+      "id": "s4",
+      "role": "lifestyle",
+      "description": "a person enjoying the product in an everyday setting",
+      "master_image": "images/master_s4.png",
+      "status": "done"
+    },
+    {
+      "id": "s5",
+      "role": "macro",
+      "description": "extreme close-up macro on texture, condensation or detail",
+      "master_image": "images/master_s5.png",
+      "status": "done"
+    },
+    {
+      "id": "s6",
+      "role": "cta",
+      "description": "final logo / product beauty shot for the call to action",
+      "master_image": "images/master_s6.png",
+      "status": "done"
+    }
+  ],
+  "boards": [
+    {
+      "market_id": "IN",
+      "shot_id": "s1",
+      "image": "images/board_IN_s1.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "IN",
+      "shot_id": "s2",
+      "image": "images/board_IN_s2.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "IN",
+      "shot_id": "s3",
+      "image": "images/board_IN_s3.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "IN",
+      "shot_id": "s4",
+      "image": "images/board_IN_s4.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "IN",
+      "shot_id": "s5",
+      "image": "images/board_IN_s5.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "IN",
+      "shot_id": "s6",
+      "image": "images/board_IN_s6.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s1",
+      "image": "images/board_BR_s1.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s2",
+      "image": "images/board_BR_s2.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s3",
+      "image": "images/board_BR_s3.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s4",
+      "image": "images/board_BR_s4.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s5",
+      "image": "images/board_BR_s5.png",
+      "brand_score": null,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "shot_id": "s6",
+      "image": "images/board_BR_s6.png",
+      "brand_score": null,
+      "status": "done"
+    }
+  ],
+  "clips": [
+    {
+      "market_id": "IN",
+      "version": 2,
+      "raw_video": "clips/IN_v3.mp4",
+      "track": "tracks/IN.mp3",
+      "final": "final/IN_v3.mp4",
+      "approved": false,
+      "status": "done"
+    },
+    {
+      "market_id": "BR",
+      "version": 2,
+      "raw_video": "clips/BR_v3.mp4",
+      "track": "tracks/BR.mp3",
+      "final": "final/BR_v3.mp4",
+      "approved": false,
+      "status": "done"
+    }
+  ],
+  "edits": [
+    {
+      "id": "5b125432",
+      "scope": "master_clip",
+      "target": null,
+      "instruction": "add gentle rising steam and slow the hero moment",
+      "source": "text",
+      "created_at": "2026-09-26T06:59:17.886455Z",
+      "applied": {
+        "IN": "done",
+        "BR": "done"
+      }
+    }
+  ],
+  "timings": [
+    {
+      "stage": "brand_sheet",
+      "started": "2026-09-26T06:57:35.401127Z",
+      "ended": "2026-09-26T06:57:40.237789Z"
+    },
+    {
+      "stage": "master_board",
+      "started": "2026-09-26T06:57:40.239231Z",
+      "ended": "2026-09-26T06:57:47.554193Z"
+    },
+    {
+      "stage": "market_boards",
+      "started": "2026-09-26T06:57:47.555616Z",
+      "ended": "2026-09-26T06:58:02.342678Z"
+    },
+    {
+      "stage": "video",
+      "started": "2026-09-26T06:58:15.754597Z",
+      "ended": "2026-09-26T06:58:56.886181Z"
+    },
+    {
+      "stage": "music",
+      "started": "2026-09-26T06:58:15.756264Z",
+      "ended": "2026-09-26T06:58:43.955576Z"
+    },
+    {
+      "stage": "mux",
+      "started": "2026-09-26T06:58:56.886508Z",
+      "ended": "2026-09-26T06:58:57.099176Z"
+    }
+  ],
+  "phase": "rendered",
+  "error": null,
+  "version": 73,
+  "created_at": "2026-09-26T06:57:35.399643Z"
+}
