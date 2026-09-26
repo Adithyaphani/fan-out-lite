@@ -1,5 +1,7 @@
 # Fan-Out Lite
 
+![Fan-Out Lite — one product, fanned out to many markets](assets/thumbnail.png)
+
 A localized ad engine. Upload a product and a brief once; the system produces a
 finished, localized video ad for **each of up to 4 markets** in a single chained
 run — storyboards, animation, regional scoring and muxing, all locked to one
