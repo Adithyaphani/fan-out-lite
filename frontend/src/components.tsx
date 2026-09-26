@@ -22,6 +22,7 @@ const STAGE_LABELS: Record<string, string> = {
   market_boards: "Market boards",
   video: "Video",
   music: "Music",
+  voice: "Voiceover",
   mux: "Mux",
 };
 
@@ -29,7 +30,7 @@ export function StagePills({ timings }: { timings: Timing[] }) {
   // Collapse duplicate stage names to their latest occurrence.
   const latest = new Map<string, Timing>();
   for (const t of timings) latest.set(t.stage, t);
-  const order = ["brand_sheet", "master_board", "market_boards", "video", "music", "mux"];
+  const order = ["brand_sheet", "master_board", "market_boards", "video", "music", "voice", "mux"];
   const items = order.filter((s) => latest.has(s)).map((s) => latest.get(s)!);
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

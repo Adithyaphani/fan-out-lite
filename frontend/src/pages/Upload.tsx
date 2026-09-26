@@ -27,6 +27,18 @@ function fmtDur(s: number): string {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
+// Mirrors the backend: each scene <= 10s, clamped to [3, 12].
+function sceneCount(s: number): number {
+  return Math.max(3, Math.min(12, Math.ceil(s / 10)));
+}
+
+// The browser's `accept` attribute is only a filter hint — many OS file
+// pickers still let the user choose "All Files" and bypass it, so we also
+// validate every selected file's actual MIME type before accepting it.
+function isImageFile(f: File): boolean {
+  return f.type.startsWith("image/");
+}
+
 /** A real dropdown with preset options plus an "Other (type your own)" escape. */
 function DropdownField({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: string[];
@@ -56,6 +68,7 @@ export default function Upload() {
   const nav = useNavigate();
   const { setRunId } = useRun();
   const [files, setFiles] = useState<File[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [name, setName] = useState("Aura Cold Brew");
   const [category, setCategory] = useState("premium canned coffee");
   const [brief, setBrief] = useState("Launch a single hero concept, localized to many markets, premium and cinematic.");
@@ -74,8 +87,20 @@ export default function Upload() {
     api.markets().then((r) => setCatalog(r.markets as MarketOpt[])).catch(() => {});
   }, []);
 
-  const previews = files.map((f) => URL.createObjectURL(f));
-  useEffect(() => () => previews.forEach(URL.revokeObjectURL), [files]);
+  const addFiles = (picked: File[]) => {
+    const images = picked.filter(isImageFile);
+    const rejected = picked.length - images.length;
+    setFileError(rejected > 0
+      ? `${rejected} file${rejected > 1 ? "s" : ""} skipped — only image files are accepted.`
+      : null);
+    if (images.length) setFiles((prev) => [...prev, ...images]);
+  };
+  const removeFile = (index: number) =>
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+
+  // Memoized so object URLs are created once per file set and revoked on change/unmount.
+  const previews = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+  useEffect(() => () => previews.forEach(URL.revokeObjectURL), [previews]);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -123,12 +148,29 @@ export default function Upload() {
         <label className="fld">
           <span>Product photos (attached to every model call for brand fidelity)</span>
           <input type="file" accept="image/*" multiple
-            onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+            onChange={(e) => {
+              addFiles(Array.from(e.target.files || []));
+              e.target.value = ""; // allow re-selecting the same file after removal
+            }} />
         </label>
+        {fileError && (
+          <p style={{ color: "var(--bad)", fontSize: 13, marginTop: -8 }}>{fileError}</p>
+        )}
         {previews.length > 0 && (
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
             {previews.map((p, i) => (
-              <img key={i} src={p} style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+              <div key={i} style={{ position: "relative" }}>
+                <img src={p} style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+                <button type="button" onClick={() => removeFile(i)} aria-label="Remove image"
+                  style={{
+                    position: "absolute", top: -6, right: -6, width: 20, height: 20,
+                    borderRadius: "50%", border: "1px solid var(--border)", background: "var(--bg-elev2)",
+                    color: "var(--text)", cursor: "pointer", display: "flex", alignItems: "center",
+                    justifyContent: "center", fontSize: 12, lineHeight: 1, padding: 0,
+                  }}>
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -163,12 +205,11 @@ export default function Upload() {
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
             <span>3s</span><span>30s</span><span>60s</span><span>90s</span><span>2m</span>
           </div>
-          {duration > 10 && (
-            <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-              The hero clip is capped at ~10s by the model and looped to fill the full {fmtDur(duration)};
-              the storyboard scenes and music span the whole timeline.
-            </p>
-          )}
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            The ad is split into {sceneCount(duration)} timed scenes; each is animated as its own
+            clip (≤10s, the model's cap) and stitched into the full {fmtDur(duration)}.
+            {duration > 30 && " Longer ads mean more clips and slower renders."}
+          </p>
         </label>
       </div>
 

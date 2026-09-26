@@ -42,10 +42,19 @@ class Settings:
 
         # Ad defaults (the scene-bible source of truth for cross-market lock).
         self.AD_DURATION_S: float = float(os.getenv("AD_DURATION_S", "6"))
-        # Omni caps a single clip at 10s; longer ads loop the hero clip to fill.
+        # Omni's per-clip bounds (confirmed against the endpoint): a request
+        # below VIDEO_MIN_S or above VIDEO_MAX_S is rejected outright (400).
+        self.VIDEO_MIN_S: float = float(os.getenv("VIDEO_MIN_S", "3"))
         self.VIDEO_MAX_S: float = float(os.getenv("VIDEO_MAX_S", "10"))
         self.AD_BPM: int = int(os.getenv("AD_BPM", "128"))
         self.AD_ASPECT: str = os.getenv("AD_ASPECT", "16:9")
+
+        # Voiceover / narration TTS model (same API key, a Gemini TTS model).
+        # Confirmed live: returns ready-to-mux audio/wav directly.
+        self.VOICE_MODEL: str = os.getenv("VOICE_MODEL", "gemini-3.8-flash-tts")
+        self.VOICE_NAME: str = os.getenv("VOICE_NAME", "Kore")
+        self.ENABLE_VOICEOVER: bool = os.getenv("ENABLE_VOICEOVER", "true").lower() == "true"
+        self.VOICE_TIMEOUT_S: int = int(os.getenv("VOICE_TIMEOUT_S", "60"))
 
         # Where runs and the demo fallback live.
         self.RUNS_DIR: Path = Path(os.getenv("RUNS_DIR", str(BACKEND_ROOT / "runs")))

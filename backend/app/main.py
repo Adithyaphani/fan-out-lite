@@ -83,6 +83,15 @@ async def create(
     palette_list = [c.strip() for c in palette.split(",") if c.strip()]
     ref_files: list[tuple[str, bytes]] = []
     for up in images:
+        # The client only *hints* image/*; a direct API call (or a browser that
+        # ignores accept=) could send anything, so re-check content type here
+        # before it ever reaches an image-generation prompt.
+        if up.content_type and not up.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{up.filename}' is not an image ({up.content_type}); "
+                        "only image files are accepted for product photos.",
+            )
         ref_files.append((up.filename or "ref.png", await up.read()))
 
     run_id, store = create_run(
@@ -193,6 +202,23 @@ async def master_edit(run_id: str, body: InstructionBody):
     store = _store_or_404(run_id)
     asyncio.create_task(
         edits.propagate_master_edit(store, body.instruction, body.source)
+    )
+    return {"ok": True}
+
+
+class MarketEditBody(BaseModel):
+    market_id: str
+    instruction: str
+    source: str = "text"
+
+
+@app.post("/api/runs/{run_id}/market-edit")
+async def market_edit(run_id: str, body: MarketEditBody):
+    import asyncio
+
+    store = _store_or_404(run_id)
+    asyncio.create_task(
+        edits.edit_market_clip(store, body.market_id, body.instruction, body.source)
     )
     return {"ok": True}
 

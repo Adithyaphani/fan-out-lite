@@ -53,6 +53,13 @@ export const api = {
       body: JSON.stringify({ instruction, source }),
     }).then(j),
 
+  marketEdit: (id: string, market_id: string, instruction: string, source = "text") =>
+    fetch(`${BASE}/api/runs/${id}/market-edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market_id, instruction, source }),
+    }).then(j),
+
   approve: (id: string, market_id: string, approved: boolean) =>
     fetch(`${BASE}/api/runs/${id}/approve`, {
       method: "POST",

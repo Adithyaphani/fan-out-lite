@@ -14,10 +14,12 @@ def _palette(brand: Brand) -> str:
 def concept_prompt(bible: SceneBible) -> str:
     b = bible.brand
     markets = ", ".join(f"{m.city} ({m.country})" for m in bible.markets)
+    n = len(bible.shots)
     return (
         f"You are a creative director. Using the attached product photos and the "
         f"details below, write ONE tight creative concept for a {bible.duration_s:.0f}-second "
-        f"video ad that will be localized to these markets: {markets}.\n\n"
+        f"video ad (paced across about {n} scenes) that will be localized to these markets: "
+        f"{markets}.\n\n"
         f"Product: {b.product_name} ({b.category})\n"
         f"Brief: {bible.brief}\n"
         f"Visual style: {b.style}\n"
@@ -125,6 +127,43 @@ def hero_clip_prompt(bible: SceneBible, market: Market) -> str:
         f"Style: {b.style}. Smooth, physically plausible, cinematic motion; "
         f"a satisfying hero moment with realistic light and texture.{beats_line} "
         f"Keep the product identical to the reference. {bible.aspect}, no text overlays."
+    )
+
+
+def scene_clip_prompt(bible: SceneBible, market: Market, shot: Shot, extra: str = "") -> str:
+    """Animate one storyboard scene into its own clip (stitched into the full ad)."""
+    b = bible.brand
+    length = max(1.0, shot.end_s - shot.start_s)
+    also = f" Also apply this change: {extra}." if extra else ""
+    return (
+        f"Animate the '{shot.role}' scene of a {bible.duration_s:.0f}s ad for {b.product_name}, "
+        f"about {length:.0f}s long, covering {shot.start_s:.1f}-{shot.end_s:.1f}s of the timeline. "
+        f"{shot.description}. Setting: {market.city}, {market.country}. Style: {b.style}. "
+        f"Smooth, physically plausible cinematic motion; keep the product identical to the "
+        f"reference.{also} {bible.aspect}, no text overlays."
+    )
+
+
+def voiceover_script_prompt(bible: SceneBible, market: Market) -> str:
+    """Ask the utility model to write a short spoken voiceover line, in the
+    market's own language, from the approved concept's tagline. The TTS model
+    speaks exactly the text it is given — it does not translate — so the
+    localization has to happen here, one text-generation call before TTS.
+    """
+    b = bible.brand
+    tagline_line = next(
+        (l for l in bible.concept.splitlines() if l.strip().upper().startswith("TAGLINE")),
+        "",
+    )
+    tagline = tagline_line.split(":", 1)[-1].strip() if tagline_line else bible.concept[:120]
+    return (
+        f"Write a short voiceover script for a {bible.duration_s:.0f}-second video ad, "
+        f"to be read aloud in {market.language} ({market.script} script). "
+        f"It must be natural, spoken {market.language}, roughly 1-2 short sentences "
+        f"(about 3-6 seconds when spoken aloud). Base it on this tagline: \"{tagline}\". "
+        f"Mention {b.product_name} once. Warm, confident, premium tone; no hashtags, "
+        f"no emoji, no stage directions, no quotation marks — return ONLY the line to speak, "
+        f"written in {market.script} script."
     )
 
 

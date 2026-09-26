@@ -10,24 +10,16 @@ import secrets
 import traceback
 
 from .adapters import concept as concept_adapter
-from .adapters import video
 from .bible import EditOp, SceneBible, Status
 from .config import settings
 from .mux import mux
 from .orchestrator import (
     _abs,
     _set_phase,
-    edit_clip,
     edit_image,
-    gen_clip,
     gen_image,
 )
-from .prompts import (
-    concept_edit_prompt,
-    hero_clip_prompt,
-    localized_board_prompt,
-    master_edit_prompt,
-)
+from .prompts import concept_edit_prompt, localized_board_prompt
 from .runs import read_bytes, run_dir
 
 
@@ -110,15 +102,16 @@ async def edit_storyboard_shot(store, shot_id: str, instruction: str, source: st
 
 # ------------------------------------------------ master-edit propagation ----
 async def propagate_master_edit(store, instruction: str, source: str = "text") -> None:
-    """Replay one instruction across every non-failed market clip, then re-mux.
+    """Replay one instruction across every non-failed market ad, then re-mux.
 
-    Tries a direct Omni clip edit; if that is unsupported, falls back to
-    regenerating from the market's keyframe with the instruction folded in.
-    Music is reused by default (edits rarely change the fixed BPM/duration).
+    Ads are stitched from per-scene clips (each within Omni's 10s cap), so a
+    single long clip can't be edited in one call. Instead we regenerate every
+    scene with the instruction folded into its prompt and re-stitch — preserving
+    each market's localization. Music is reused (edits keep BPM/duration fixed).
     """
     import asyncio
 
-    from .orchestrator import _hero_keyframe
+    from .orchestrator import render_market_video
 
     bible = store.load()
     op = EditOp(id=_new_id(), scope="master_clip", instruction=instruction, source=source)
@@ -130,23 +123,13 @@ async def propagate_master_edit(store, instruction: str, source: str = "text") -
         clip = bib.clip(market_id)
         if not clip or clip.status == Status.failed or not clip.raw_video:
             return market_id, Status.failed.value
-        market = bible.market(market_id)
-        keyframe = _hero_keyframe(bible, market_id)
         version = clip.version + 1
-        rel = f"clips/{market_id}_v{version}.mp4"
-        prompt = master_edit_prompt(bible, market, instruction)
         try:
-            clip_bytes = read_bytes(bible.run_id, clip.raw_video)
-            try:
-                await edit_clip(clip_bytes, keyframe or clip_bytes, prompt, _abs(bible.run_id, rel),
-                                duration_s=bible.duration_s)
-            except Exception:
-                # FALLBACK: regenerate from the keyframe with the instruction added.
-                if keyframe is None:
-                    raise
-                folded = hero_clip_prompt(bible, market) + f" Also apply this change: {instruction}."
-                await gen_clip(folded, keyframe, _abs(bible.run_id, rel), duration_s=bible.duration_s)
-            await store.update(lambda b: _bump_clip(b, market_id, rel))
+            raw = await render_market_video(bible, market_id, version=version,
+                                            extra_instruction=instruction)
+            if not raw:
+                return market_id, Status.failed.value
+            await store.update(lambda b: _bump_clip(b, market_id, raw))
             return market_id, Status.done.value
         except Exception:
             traceback.print_exc()
@@ -169,6 +152,50 @@ async def propagate_master_edit(store, instruction: str, source: str = "text") -
         await store.update(lambda b: _finalize(b, market_id, rel))
 
     await asyncio.gather(*(remux(m.id) for m in bible.markets), return_exceptions=True)
+    await _set_phase(store, "rendered")
+
+
+# -------------------------------------------------- per-location clip edit ----
+async def edit_market_clip(store, market_id: str, instruction: str, source: str = "text") -> None:
+    """Apply an edit to ONE market's ad only (location-wise edit).
+
+    Regenerates just that market's scenes with the instruction folded in,
+    re-stitches, and re-muxes against its existing track. The other markets
+    are untouched.
+    """
+    from .orchestrator import render_market_video
+
+    bible = store.load()
+    op = EditOp(id=_new_id(), scope="market_clip", target=market_id,
+                instruction=instruction, source=source)
+    await store.update(lambda b: b.edits.append(op))
+    await _set_phase(store, "propagating")
+
+    clip = bible.clip(market_id)
+    if not clip or not clip.raw_video:
+        await _mark_edit(store, op.id, {market_id: Status.failed.value})
+        await _set_phase(store, "rendered")
+        return
+
+    version = clip.version + 1
+    try:
+        raw = await render_market_video(bible, market_id, version=version,
+                                        extra_instruction=instruction)
+        if not raw:
+            raise RuntimeError("no video produced")
+        await store.update(lambda b: _bump_clip(b, market_id, raw))
+        # Re-mux this market only.
+        bib = store.load()
+        c = bib.clip(market_id)
+        if c and c.raw_video and c.track:
+            rel = f"final/{market_id}_v{c.version}.mp4"
+            await mux(_abs(bible.run_id, c.raw_video), _abs(bible.run_id, c.track),
+                      _abs(bible.run_id, rel), duration_s=bible.duration_s)
+            await store.update(lambda b: _finalize(b, market_id, rel))
+        await _mark_edit(store, op.id, {market_id: Status.done.value})
+    except Exception:
+        traceback.print_exc()
+        await _mark_edit(store, op.id, {market_id: Status.failed.value})
     await _set_phase(store, "rendered")
 
 

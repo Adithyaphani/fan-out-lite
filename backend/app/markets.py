@@ -3,7 +3,10 @@ never about people — reviewed once as a team to stay respectful.
 """
 from __future__ import annotations
 
+import math
+
 from .bible import Market
+from .config import settings
 
 # Catalog: two famous cities per country. The original four ids (IN, BR, KR, NG)
 # are preserved for backward compatibility with the fallback run and prerender.
@@ -212,15 +215,63 @@ MARKETS: dict[str, Market] = {
 # Preselected in the UI and used when a run supplies no valid markets.
 DEFAULT_MARKET_IDS: list[str] = ["IN", "BR", "KR", "NG"]
 
-# Default 6-shot master storyboard skeleton (roles + generic descriptions).
-DEFAULT_SHOTS: list[dict[str, str]] = [
-    {"id": "s1", "role": "establishing", "description": "wide establishing shot that sets the scene and mood"},
-    {"id": "s2", "role": "product", "description": "clean product reveal, centred, shallow depth of field"},
-    {"id": "s3", "role": "hero", "description": "the hero moment: a satisfying pour / use of the product"},
-    {"id": "s4", "role": "lifestyle", "description": "a person enjoying the product in an everyday setting"},
-    {"id": "s5", "role": "macro", "description": "extreme close-up macro on texture, condensation or detail"},
-    {"id": "s6", "role": "cta", "description": "final logo / product beauty shot for the call to action"},
-]
+# Narrative arc used to label an arbitrary number of scenes. The middle beats
+# cycle so any scene count still opens on "establishing" and closes on "cta";
+# at n=6 this reproduces the classic establishing/product/hero/lifestyle/macro/cta.
+_MIDDLE_BEATS = ["product", "hero", "lifestyle", "macro", "detail"]
+
+_ROLE_DESCRIPTIONS = {
+    "establishing": "wide establishing shot that sets the scene and mood",
+    "product": "clean product reveal, centred, shallow depth of field",
+    "hero": "the hero moment: a satisfying use of the product",
+    "lifestyle": "a person enjoying the product in an everyday setting",
+    "macro": "extreme close-up macro on texture, condensation or detail",
+    "detail": "a design or ingredient detail that sells the product",
+    "cta": "final logo / product beauty shot for the call to action",
+}
+
+
+def plan_shot_count(duration_s: float) -> int:
+    """How many storyboard scenes for an ad of this length.
+
+    Omni rejects any single clip shorter than VIDEO_MIN_S or longer than
+    VIDEO_MAX_S, so when the timeline is split evenly across n scenes, n must
+    satisfy VIDEO_MIN_S <= duration/n <= VIDEO_MAX_S:
+
+      - n_min = ceil(duration / VIDEO_MAX_S)  -- enough scenes that none exceeds the cap
+      - n_max = floor(duration / VIDEO_MIN_S) -- not so many that any scene is under the floor
+
+    A short ad (e.g. 6s) may only support 1-2 scenes at the 3s floor — forcing
+    a fixed minimum of 3 here is what used to make every scene under 9s total
+    request an invalid (<3s) clip and fail outright. We pick the largest n in
+    [n_min, n_max] up to a readable cap of 6, so longer ads still get a full
+    storyboard while short ones degrade gracefully to fewer, longer scenes.
+    """
+    lo = max(0.1, float(settings.VIDEO_MIN_S))
+    hi = max(lo, float(settings.VIDEO_MAX_S))
+    n_min = max(1, math.ceil(duration_s / hi))
+    n_max = max(1, math.floor(duration_s / lo))
+    if n_max < n_min:
+        n_max = n_min  # duration shorter than one min-length clip; fall back to n_min
+    preferred = min(6, n_max)
+    return max(n_min, min(n_max, preferred))
+
+
+def build_shots(n: int) -> list[dict[str, str]]:
+    """Build an n-scene skeleton with a coherent narrative arc."""
+    if n <= 1:
+        # A very short ad is one continuous hero shot, not a multi-beat arc.
+        return [{"id": "s1", "role": "hero", "description": _ROLE_DESCRIPTIONS["hero"]}]
+    shots: list[dict[str, str]] = []
+    for i in range(n):
+        if i == 0:
+            role = "establishing"
+        elif i == n - 1:
+            role = "cta"
+        else:
+            role = _MIDDLE_BEATS[(i - 1) % len(_MIDDLE_BEATS)]
+        shots.append({"id": f"s{i + 1}", "role": role, "description": _ROLE_DESCRIPTIONS[role]})
+    return shots
 
 
 def market_ids() -> list[str]:

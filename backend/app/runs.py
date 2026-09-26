@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .bible import Brand, BibleStore, Market, SceneBible, Shot
 from .config import settings
-from .markets import DEFAULT_MARKET_IDS, DEFAULT_SHOTS, MARKETS
+from .markets import DEFAULT_MARKET_IDS, MARKETS, build_shots, plan_shot_count
 
 # One BibleStore per run id, kept in memory so the asyncio lock is shared
 # across every request and background task touching that run.
@@ -87,7 +87,10 @@ def create_run(
         product_refs=ref_paths,
         spec_notes=spec_notes,
     )
-    shots = [Shot(id=s["id"], role=s["role"], description=s["description"]) for s in DEFAULT_SHOTS]
+    dur = float(duration_s) if duration_s else settings.AD_DURATION_S
+    # Scene count scales with duration so each scene fits one Omni clip.
+    shots = [Shot(id=s["id"], role=s["role"], description=s["description"])
+             for s in build_shots(plan_shot_count(dur))]
 
     bible = SceneBible(
         run_id=run_id,
@@ -95,7 +98,7 @@ def create_run(
         brand=brand,
         markets=[Market(**m.model_dump()) for m in chosen],
         bpm=settings.AD_BPM,
-        duration_s=float(duration_s) if duration_s else settings.AD_DURATION_S,
+        duration_s=dur,
         aspect=settings.AD_ASPECT,
         shots=shots,
         phase="created",

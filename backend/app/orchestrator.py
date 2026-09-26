@@ -19,18 +19,19 @@ from tenacity import (
 )
 
 from .adapters import concept as concept_adapter
-from .adapters import image, judge, music, video
+from .adapters import image, judge, music, video, voice
 from .bible import Clip, MarketBoard, SceneBible, Status
 from .config import settings
-from .mux import mux
+from .mux import concat, mux
 from .prompts import (
     brand_sheet_prompt,
     concept_prompt,
-    hero_clip_prompt,
     localized_board_prompt,
     master_shot_prompt,
     regional_track_prompt,
+    scene_clip_prompt,
     shotlist_prompt,
+    voiceover_script_prompt,
 )
 from .runs import read_bytes, run_dir
 
@@ -40,11 +41,13 @@ _TIMEOUTS = {
     "image": settings.IMAGE_TIMEOUT_S,
     "video": settings.VIDEO_TIMEOUT_S,
     "music": settings.MUSIC_TIMEOUT_S,
+    "voice": settings.VOICE_TIMEOUT_S,
 }
 _SIZES = {
     "image": settings.IMAGE_CONCURRENCY,
     "video": settings.VIDEO_CONCURRENCY,
     "music": settings.MUSIC_CONCURRENCY,
+    "voice": settings.MUSIC_CONCURRENCY,  # narration is cheap; reuse the music lane's width
 }
 
 
@@ -81,6 +84,7 @@ edit_image = guarded("image")(image.edit_image)
 gen_clip = guarded("video")(video.generate_clip)
 edit_clip = guarded("video")(video.edit_clip)
 gen_track = guarded("music")(music.generate_track)
+gen_voice = guarded("voice")(voice.generate_voiceover)
 
 
 # ---------------------------------------------------------------- helpers ----
@@ -98,24 +102,20 @@ async def _set_phase(store, phase: str) -> None:
 
 # ------------------------------------------------------- stage 0 (plan) ------
 def _normalize_timeline(shots, duration: float) -> None:
-    """Force contiguous, non-overlapping windows covering 0..duration in order."""
+    """Split the timeline into equal contiguous windows covering 0..duration.
+
+    Even windows guarantee every scene fits Omni's per-clip cap (the scene count
+    is chosen so duration/n <= cap) and that the stitched clips align exactly to
+    the full duration — so the model's creative *descriptions* vary per scene
+    while the *timing* stays valid for stitching.
+    """
     n = len(shots)
     if n == 0:
         return
-    # Trust model start/end if sane and ascending; otherwise split evenly.
-    ok = all(s.end_s > s.start_s for s in shots) and all(
-        shots[i].start_s <= shots[i + 1].start_s for i in range(n - 1)
-    )
-    if not ok:
-        step = duration / n
-        for i, s in enumerate(shots):
-            s.start_s = round(i * step, 2)
-            s.end_s = round((i + 1) * step, 2)
-    # Snap the ends so the last scene lands exactly on duration.
-    shots[0].start_s = 0.0
-    shots[-1].end_s = round(float(duration), 2)
-    for i in range(n - 1):
-        shots[i + 1].start_s = shots[i].end_s
+    step = duration / n
+    for i, s in enumerate(shots):
+        s.start_s = round(i * step, 2)
+        s.end_s = round((i + 1) * step, 2) if i < n - 1 else round(float(duration), 2)
 
 
 async def stage_plan_shots(store) -> None:
@@ -242,85 +242,186 @@ async def stage_market_boards(store) -> None:
 
 
 # --------------------------------------------------------------- stage 4 -----
-def _hero_keyframe(bible: SceneBible, market_id: str) -> bytes | None:
-    """Pick the market's hero board as the animation keyframe, else the first."""
-    hero = next((s for s in bible.shots if s.role == "hero"), None)
-    order = [hero.id] if hero else []
-    order += [s.id for s in bible.shots]
-    for sid in order:
-        board = bible.board(market_id, sid)
-        if board and board.image:
-            return read_bytes(bible.run_id, board.image)
+def _scene_keyframe(bible: SceneBible, market_id: str, shot) -> bytes | None:
+    """The animation keyframe for a scene = that scene's localized board, with
+    fallbacks to the shot's master frame or any available board for the market."""
+    board = bible.board(market_id, shot.id)
+    if board and board.image:
+        return read_bytes(bible.run_id, board.image)
+    if shot.master_image:
+        return read_bytes(bible.run_id, shot.master_image)
+    for other in bible.shots:
+        b = bible.board(market_id, other.id)
+        if b and b.image:
+            return read_bytes(bible.run_id, b.image)
     return None
 
 
-async def stage_video(store) -> None:
-    bible = store.load()
-    await store.start_stage("video")
+def _scene_len(shot, bible: SceneBible) -> float:
+    """Clip length for a scene: its timeline window, clamped to Omni's bounds.
 
-    def _seed(b: SceneBible):
-        have = {c.market_id for c in b.clips}
-        for m in b.markets:
-            if m.id not in have:
-                b.clips.append(Clip(market_id=m.id))
+    Omni rejects a request outside [VIDEO_MIN_S, VIDEO_MAX_S] outright (400),
+    so both ends must be enforced here, not just the cap — plan_shot_count
+    picks a scene count that should already keep every window in range, but
+    this is the last line of defense against any per-scene edit or rounding
+    pushing a single clip below the floor.
+    """
+    length = shot.end_s - shot.start_s
+    if length <= 0:
+        length = bible.duration_s / max(1, len(bible.shots))
+    return max(float(settings.VIDEO_MIN_S), min(float(settings.VIDEO_MAX_S), round(length)))
 
-    await store.update(_seed)
 
-    async def one(market_id: str):
-        bib = store.load()
-        clip = bib.clip(market_id)
-        if clip and clip.raw_video and clip.status in (Status.done, Status.approved):
-            return
-        keyframe = _hero_keyframe(bible, market_id)
+async def render_market_video(bible: SceneBible, market_id: str, version: int,
+                              extra_instruction: str = "") -> str | None:
+    """Generate one Omni clip per storyboard scene for a market and concatenate
+    them into a full-length raw video. Returns the relative path, or None.
+
+    This is the heart of Option 2: distinct footage per beat, each clip within
+    Omni's 10s cap, stitched to the full duration. Reused by the master edit,
+    which passes an extra instruction folded into every scene prompt.
+    """
+    market = bible.market(market_id)
+    if market is None:
+        return None
+    run_id = bible.run_id
+    scene_dir = f"clips/scenes"
+
+    async def one_scene(shot):
+        keyframe = _scene_keyframe(bible, market_id, shot)
         if keyframe is None:
-            return
-        market = bible.market(market_id)
-        rel = f"clips/{market_id}_v1.mp4"
-        await store.update(lambda b: _set_clip_status(b, market_id, Status.running))
-        try:
-            await gen_clip(hero_clip_prompt(bible, market), keyframe, _abs(bible.run_id, rel),
-                           duration_s=bible.duration_s)
-            await store.update(lambda b: _set_clip_field(b, market_id, "raw_video", rel, Status.done))
-        except Exception:
-            await store.update(lambda b: _set_clip_status(b, market_id, Status.failed))
-            raise
+            return None
+        rel = f"{scene_dir}/{market_id}_{shot.id}_v{version}.mp4"
+        out = _abs(run_id, rel)
+        await gen_clip(
+            scene_clip_prompt(bible, market, shot, extra_instruction),
+            keyframe, out, duration_s=_scene_len(shot, bible),
+        )
+        return out
 
-    await asyncio.gather(*(one(m.id) for m in bible.markets), return_exceptions=True)
+    scene_paths = await asyncio.gather(*(one_scene(s) for s in bible.shots),
+                                       return_exceptions=True)
+    ordered = [p for p in scene_paths if isinstance(p, str)]
+    if not ordered:
+        return None
+    raw_rel = f"clips/{market_id}_v{version}.mp4"
+    await concat(ordered, _abs(run_id, raw_rel))
+    return raw_rel
+
+
+def _seed_clips(b: SceneBible) -> None:
+    have = {c.market_id for c in b.clips}
+    for m in b.markets:
+        if m.id not in have:
+            b.clips.append(Clip(market_id=m.id))
+
+
+async def _render_one_video(store, bible: SceneBible, market_id: str) -> str | None:
+    """Generate (or reuse) one market's raw video. Returns the relative path."""
+    bib = store.load()
+    clip = bib.clip(market_id)
+    if clip and clip.raw_video and clip.status in (Status.done, Status.approved):
+        return clip.raw_video
+    await store.update(lambda b: _set_clip_status(b, market_id, Status.running))
+    try:
+        raw = await render_market_video(bible, market_id, version=1)
+        if raw:
+            await store.update(lambda b: _set_clip_field(b, market_id, "raw_video", raw, Status.done))
+            return raw
+        await store.update(lambda b: _set_clip_status(b, market_id, Status.failed))
+        return None
+    except Exception:
+        await store.update(lambda b: _set_clip_status(b, market_id, Status.failed))
+        raise
+
+
+async def _render_one_track(store, bible: SceneBible, market_id: str) -> str | None:
+    """Generate (or reuse) one market's music track. Returns the relative path."""
+    bib = store.load()
+    clip = bib.clip(market_id)
+    if clip and clip.track:
+        return clip.track
+    market = bible.market(market_id)
+    rel = f"tracks/{market_id}.mp3"
+    try:
+        await gen_track(regional_track_prompt(bible, market), _abs(bible.run_id, rel))
+        await store.update(lambda b: _set_clip_field(b, market_id, "track", rel))
+        return rel
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+async def _render_one_voice(store, bible: SceneBible, market_id: str) -> str | None:
+    """Generate (or reuse) one market's localized voiceover. Returns the
+    relative path, or None if voiceover is disabled or generation fails (the
+    ad still gets background music either way — narration is best-effort)."""
+    if not settings.ENABLE_VOICEOVER:
+        return None
+    bib = store.load()
+    clip = bib.clip(market_id)
+    if clip and clip.voice:
+        return clip.voice
+    market = bible.market(market_id)
+    rel = f"tracks/{market_id}_voice.wav"
+    try:
+        script = await concept_adapter.generate_text(voiceover_script_prompt(bible, market))
+        if not script:
+            return None
+        await gen_voice(script, _abs(bible.run_id, rel))
+        await store.update(lambda b: _set_clip_field(b, market_id, "voice", rel))
+        return rel
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+async def render_and_mux_one_market(store, bible: SceneBible, market_id: str) -> None:
+    """Render one market's video + music + voiceover in parallel, then mux it
+    *as soon as all are ready* — independent of every other market. This is
+    what lets the UI preview a market's finished ad while slower markets are
+    still rendering, instead of waiting for every market to finish before any
+    becomes playable.
+    """
+    raw, track, voice_path = await asyncio.gather(
+        _render_one_video(store, bible, market_id),
+        _render_one_track(store, bible, market_id),
+        _render_one_voice(store, bible, market_id),
+    )
+    if not raw or not track:
+        return  # left in its current (failed / partial) status; other markets unaffected
+    bib = store.load()
+    c = bib.clip(market_id)
+    version = (c.version + 1) if (c and c.final) else 1
+    rel = f"final/{market_id}_v{version}.mp4"
+    await mux(_abs(bible.run_id, raw), _abs(bible.run_id, track),
+              _abs(bible.run_id, rel), duration_s=bible.duration_s,
+              voice_path=_abs(bible.run_id, voice_path) if voice_path else None)
+    await store.update(lambda b: _finalize_clip(b, market_id, rel, version))
+
+
+async def stage_video(store) -> None:
+    """Kept for the smoke test / scripted use: generate every market's video only."""
+    bible = store.load()
+    await store.update(_seed_clips)
+    await store.start_stage("video")
+    await asyncio.gather(*(_render_one_video(store, bible, m.id) for m in bible.markets),
+                        return_exceptions=True)
     await store.end_stage("video")
 
 
-# --------------------------------------------------------------- stage 5 -----
 async def stage_music(store) -> None:
+    """Kept for the smoke test / scripted use: generate every market's track only."""
     bible = store.load()
+    await store.update(_seed_clips)
     await store.start_stage("music")
-
-    def _seed(b: SceneBible):
-        have = {c.market_id for c in b.clips}
-        for m in b.markets:
-            if m.id not in have:
-                b.clips.append(Clip(market_id=m.id))
-
-    await store.update(_seed)
-
-    async def one(market_id: str):
-        bib = store.load()
-        clip = bib.clip(market_id)
-        if clip and clip.track:
-            return
-        market = bible.market(market_id)
-        rel = f"tracks/{market_id}.mp3"
-        try:
-            await gen_track(regional_track_prompt(bible, market), _abs(bible.run_id, rel))
-            await store.update(lambda b: _set_clip_field(b, market_id, "track", rel))
-        except Exception:
-            traceback.print_exc()
-
-    await asyncio.gather(*(one(m.id) for m in bible.markets), return_exceptions=True)
+    await asyncio.gather(*(_render_one_track(store, bible, m.id) for m in bible.markets),
+                        return_exceptions=True)
     await store.end_stage("music")
 
 
-# --------------------------------------------------------------- stage 6 -----
 async def stage_mux(store) -> None:
+    """Mux every market that already has both a raw video and a track."""
     bible = store.load()
     await store.start_stage("mux")
 
@@ -331,12 +432,9 @@ async def stage_mux(store) -> None:
             return
         version = c.version + 1 if c.final else 1
         rel = f"final/{clip.market_id}_v{version}.mp4"
-        await mux(
-            _abs(bible.run_id, c.raw_video),
-            _abs(bible.run_id, c.track),
-            _abs(bible.run_id, rel),
-            duration_s=bible.duration_s,
-        )
+        await mux(_abs(bible.run_id, c.raw_video), _abs(bible.run_id, c.track),
+                  _abs(bible.run_id, rel), duration_s=bible.duration_s,
+                  voice_path=_abs(bible.run_id, c.voice) if c.voice else None)
         await store.update(lambda b: _finalize_clip(b, clip.market_id, rel, version))
 
     await asyncio.gather(*(one(c) for c in bible.clips), return_exceptions=True)
@@ -405,13 +503,28 @@ async def run_image_pipeline(store) -> None:
 
 
 async def run_render(store) -> None:
-    """Stages 4-6: video + music in parallel, then mux."""
+    """Stages 4-6: video + music in parallel per market, muxed as each market
+    finishes — so a fast market's ad is playable in the UI immediately, rather
+    than every market waiting on the slowest one before any preview appears.
+    """
     try:
         await _set_phase(store, "rendering")
-        # Music does not depend on the clips (BPM/duration are fixed), so run
-        # it alongside video for the speed win.
-        await asyncio.gather(stage_video(store), stage_music(store))
-        await stage_mux(store)
+        bible = store.load()
+        await store.update(_seed_clips)
+        await store.start_stage("video")
+        await store.start_stage("music")
+        if settings.ENABLE_VOICEOVER:
+            await store.start_stage("voice")
+        await store.start_stage("mux")
+        await asyncio.gather(
+            *(render_and_mux_one_market(store, bible, m.id) for m in bible.markets),
+            return_exceptions=True,
+        )
+        await store.end_stage("video")
+        await store.end_stage("music")
+        if settings.ENABLE_VOICEOVER:
+            await store.end_stage("voice")
+        await store.end_stage("mux")
         await _set_phase(store, "rendered")
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()

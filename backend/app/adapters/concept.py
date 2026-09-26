@@ -33,6 +33,16 @@ async def revise_concept(prompt: str) -> str:
     return (resp.text or "").strip()
 
 
+async def generate_text(prompt: str) -> str:
+    """Generic plain-text completion (used for the localized voiceover script)."""
+    client = get_client()
+    resp = await client.aio.models.generate_content(
+        model=settings.UTILITY_MODEL,
+        contents=[types.Part.from_text(text=prompt)],
+    )
+    return (resp.text or "").strip()
+
+
 async def plan_json(prompt: str) -> str:
     """Return a strict-JSON completion (used for the timed shot list)."""
     client = get_client()

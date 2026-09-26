@@ -74,7 +74,7 @@ export default function Storyboard() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="eyebrow">Step 2 · Storyboard</div>
-          <h1 className="h1" style={{ margin: "8px 0 0" }}>6-shot master, localized {bible.markets.length}×</h1>
+          <h1 className="h1" style={{ margin: "8px 0 0" }}>{bible.shots.length}-scene master, localized {bible.markets.length}×</h1>
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="muted" style={{ fontSize: 12 }}>Pipeline time</div>
@@ -89,7 +89,8 @@ export default function Storyboard() {
       )}
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="filmstrip">
+        <div className="filmstrip"
+          style={{ gridTemplateColumns: `repeat(${Math.min(bible.shots.length, 6)}, 1fr)` }}>
           {bible.shots.map((s, i) => (
             <div key={s.id}>
               <button className={`frame ${s.id === sel ? "sel" : ""}`}

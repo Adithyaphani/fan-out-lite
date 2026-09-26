@@ -72,7 +72,8 @@ class Clip(BaseModel):
     market_id: str
     version: int = 0
     raw_video: str | None = None
-    track: str | None = None
+    track: str | None = None  # Lyria background music
+    voice: str | None = None  # TTS voiceover / narration, mixed over the track
     final: str | None = None  # muxed mp4
     approved: bool = False
     status: Status = Status.queued

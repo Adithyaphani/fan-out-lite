@@ -21,33 +21,92 @@ async def _run(*args: str) -> None:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {tail}")
 
 
-async def mux(video_path: str, track_path: str, out_path: str, duration_s: float | None = None) -> str:
-    """Replace the clip's audio with the regional track, trimmed to duration.
-
-    -t caps output length; -af apad pads a short track with silence so the
-    stream never ends before the video. The Omni clip's own audio is dropped.
+async def mux(
+    video_path: str,
+    track_path: str,
+    out_path: str,
+    duration_s: float | None = None,
+    voice_path: str | None = None,
+) -> str:
+    """Merge the clip's video with the regional music track, trimmed to
+    duration. When `voice_path` is given, a spoken voiceover is mixed in over
+    the (ducked) background music — otherwise the final has music only, no
+    narration. -t caps output length so the stream never overshoots; the
+    Omni clip's own audio is always dropped in favour of the generated track(s).
     """
     dur = duration_s if duration_s is not None else settings.AD_DURATION_S
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
 
     # If the hero clip is shorter than the target (Omni caps clips at ~10s),
     # loop it to fill the full ad timeline. -stream_loop repeats the input; -t
-    # hard-caps the output; -af apad pads the track so it never ends early.
+    # hard-caps the output.
     vlen = await probe_duration(video_path)
     loop_video = vlen and vlen + 0.05 < dur
     pre_input = ["-stream_loop", "-1"] if loop_video else []
     # A looped stream can't be stream-copied cleanly, so re-encode when looping.
     vcodec = ["-c:v", "libx264", "-pix_fmt", "yuv420p"] if loop_video else ["-c:v", "copy"]
 
+    if voice_path:
+        # Ducks the background music under the narration and mixes them into
+        # one audio stream. `apad` on each keeps the stream alive past its own
+        # natural length so `-t` (not a short input) decides where audio ends.
+        filt = (
+            "[1:a]volume=0.25,apad[bg];"
+            "[2:a]apad[vo];"
+            "[bg][vo]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        )
+        await _run(
+            *pre_input,
+            "-i", video_path,
+            "-i", track_path,
+            "-i", voice_path,
+            "-filter_complex", filt,
+            "-map", "0:v:0", "-map", "[aout]",
+            *vcodec, "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{dur:.3f}",
+            out_path,
+        )
+    else:
+        await _run(
+            *pre_input,
+            "-i", video_path,
+            "-i", track_path,
+            "-map", "0:v:0", "-map", "1:a:0",
+            *vcodec, "-c:a", "aac", "-b:a", "192k",
+            "-af", "apad",
+            "-t", f"{dur:.3f}",
+            "-shortest",
+            out_path,
+        )
+    return out_path
+
+
+async def concat(video_paths: list[str], out_path: str) -> str:
+    """Concatenate per-scene clips into one video (no audio).
+
+    Each input is normalised to a common 1280x720 frame before concat so clips
+    of slightly different sizes stitch cleanly; the result is re-encoded h264.
+    """
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    n = len(video_paths)
+    if n == 0:
+        raise RuntimeError("concat: no clips")
+
+    inputs: list[str] = []
+    for p in video_paths:
+        inputs += ["-i", p]
+    norm = "".join(
+        f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+        f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];"
+        for i in range(n)
+    )
+    joins = "".join(f"[v{i}]" for i in range(n))
+    filt = f"{norm}{joins}concat=n={n}:v=1:a=0[v]"
     await _run(
-        *pre_input,
-        "-i", video_path,
-        "-i", track_path,
-        "-map", "0:v:0", "-map", "1:a:0",
-        *vcodec, "-c:a", "aac", "-b:a", "192k",
-        "-af", "apad",
-        "-t", f"{dur:.3f}",
-        "-shortest",
+        *inputs,
+        "-filter_complex", filt,
+        "-map", "[v]",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
         out_path,
     )
     return out_path
